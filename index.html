@@ -1239,6 +1239,7 @@ function parseTable(rows,sheetSubject){
       else if(/^(date|due)/.test(t)){m.date=j;hits++;}
       else if(/^(day|day ?#|day number|school day|lesson day)\b/.test(t)&&t.length<16){m.day=j;hits++;}
       else if(/^week\b/.test(t)&&t.length<10){m.week=j;}
+      else if(/^(group|unit|section|book)\b/.test(t)&&t.length<16){m.group=j;}
       else if(/^(points|possible|total|max|out of)/.test(t)){m.points=j;hits++;}
       else if(/^(lesson|assignment|title|activity|task|description|topic|work|item|name)/.test(t)&&m.title==null){m.title=j;hits++;}
       else { var sub=t.length<45?matchSubject(t):''; if(sub){ m.subjectCols.push({j:j,s:sub}); hits++; } }
@@ -1267,8 +1268,11 @@ function parseTable(rows,sheetSubject){
     var typeTxt=map.type!=null?cellStr(r[map.type]):'';
     var type=typeTxt?(/daily|lesson|worksheet|homework|practice/i.test(typeTxt)?'daily':classifyType(typeTxt)):classifyType(title);
     var day=map.day!=null?toDay(r[map.day]):toDay(title.match(/(?:week\s*\d+\s*,?\s*)?day\s*\d+/i)?title:null);
-    if(map.week!=null&&day&&day<=5){ var wk=parseInt(cellStr(r[map.week]),10); if(wk) day=(wk-1)*5+day; }
-    out.push(mkDraftItem(subj,title,type,day,map.date!=null?toISODate(r[map.date]):'',map.points!=null?parseFloat(cellStr(r[map.points])):null,true));
+    var it=mkDraftItem(subj,title,type,day,map.date!=null?toISODate(r[map.date]):'',map.points!=null?parseFloat(cellStr(r[map.points])):null,true);
+    // "Week 3 / Day 2" rows go on that school week, using the subject's weekly schedule (and the Friday-test rule)
+    var wk=map.week!=null?parseInt(cellStr(r[map.week]),10):0; if(wk&&day&&day<=5&&!it.date){ it.week=wk; it.wday=day; it.day=null; }
+    if(map.group!=null){ var gv=cellStr(r[map.group]); if(gv) it.group=/^\d+$/.test(gv)?'Unit '+gv:gv; }
+    out.push(it);
   });
   return out;
 }
