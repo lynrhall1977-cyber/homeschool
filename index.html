@@ -961,6 +961,10 @@ function draftHTML(){
   var visible=items.filter(function(i){return !importOpts.strict||i.kw;});
   var h=(draft.workbook?'<div class="callout info" style="margin-bottom:14px"><span>Read as a labeled workbook: <b>'+draft.workbook.lessons+' daily assignments</b> and <b>'+draft.workbook.tests+' tests</b>'+(draft.workbook.groups?' across '+draft.workbook.groups:'')+(draft.workbook.range?', '+draft.workbook.range:'')+'. Each front-and-back page pair is one assignment, placed on its school day.'+(draft.workbook.weekly?' “Week 3 Day 2” goes on the 2nd school day of your 3rd school week.':'')+'</span></div>':'')+'<section class="panel"><div class="panel-head"><div><h3>2. Review '+esc(draft.name)+'</h3><p class="sub">'+visible.length+' rows found'+(importOpts.strict&&visible.length<items.length?' ('+(items.length-visible.length)+' hidden by the assignment filter)':'')+'. Uncheck anything you don’t want.</p></div>';
   h+='<div class="row"><button class="btn small" data-action="draft-all">Check all</button><button class="btn small" data-action="draft-none">Uncheck all</button></div></div>';
+  if(items.some(function(i){return i.baseWeek;})){
+    var cw=getCal().weeks||[];
+    h+='<div class="row" style="margin-bottom:12px;align-items:flex-end"><label class="f" style="flex:0 1 260px">Week 1 starts the week of<input type="date" id="imp-start" value="'+esc(draft.startWeekOf)+'"></label><span class="sub" style="flex:1 1 260px">'+(draft.weekShift?'Book Week 1 goes in school week '+(draft.weekShift+1)+' (week of '+esc(fmt(cw[draft.weekShift][0],{y:1}))+'). Each later week follows in order.':'Leave blank to start in the first week of school. Pick a date to start this workbook later in the year.')+'</span></div>';
+  }
   var bySub={}; inc.forEach(function(i){ if(importOpts.strict&&!i.kw) return; var k=i.subject||'No subject'; bySub[k]=(bySub[k]||0)+1; });
   h+='<div class="counts" style="margin-bottom:12px">'+Object.keys(bySub).map(function(k){return '<span class="tag'+(k==='No subject'?' bad':'')+'">'+esc(k)+': '+bySub[k]+'</span>';}).join('')+'</div>';
   if(bySub['No subject']) h+='<div class="row" style="margin-bottom:12px"><label class="f" style="flex:0 1 300px">Give rows with no subject this subject<select id="bulk-subject"><option value="">Choose…</option>'+SUBJECTS.map(function(s){return '<option>'+esc(s)+'</option>';}).join('')+'</select></label></div>';
@@ -1021,7 +1025,8 @@ function handleFile(file){
 function setDraft(name,items){
   var fs=importOpts.subject!=='auto'?importOpts.subject:'';
   items.forEach(function(i){ if(fs) i.subject=fs; i.include=true; });
-  draft={name:name,items:items,workbook:items.workbook||null,sample:items.sample||''};
+  items.forEach(function(i){ if(i.week) i.baseWeek=i.week; });
+  draft={name:name,items:items,workbook:items.workbook||null,sample:items.sample||'',startWeekOf:'',weekShift:0};
   if(items.noText) draft.error='The pages of '+name+' are pictures, not text, so the corner labels can’t be read. Save or export the PDF again from the program you made the workbook in (not a scan or “print as image”), then import that file.';
   else if(!items.length) draft.error='No assignments were found in '+name+'. Open “See the text the reader found” to check what was read from the first pages.';
   refreshDraft();
@@ -1123,20 +1128,36 @@ function pageHeaderInfo(raw){
 }
 function scanPages(pages,fileName){
   var items=[], seen={}, unit=null, cycle=null, lessons=0, tests=0, gU={}, gC={};
-  var weekNames={}, byKey={}, unitNames={};
-  pages.forEach(function(raw){ String(raw).split('\n').forEach(function(line){ var um=line.match(/\bunit\s*(\d{1,3})\s*·\s*(.+?)\s+learn\s+\d/i); if(um&&!unitNames[+um[1]]) unitNames[+um[1]]=um[2].trim(); }); });
+  var weekNames={}, byKey={}, unitNames={}, schedMax=0, lastWeek=0, projByUnit={};
+  pages.forEach(function(raw){ if(!/weekly schedule/i.test(String(raw).slice(0,300))) return; var re=/(?:^|\s)(\d{1,2})\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b/gi, m; while((m=re.exec(raw))) schedMax=Math.max(schedMax,+m[1]); });
+  pages.forEach(function(raw){ var ls=String(raw).split('\n'), plan=/lesson plans/i.test(String(raw).slice(0,200));
+    ls.forEach(function(line,li){
+      var um=line.match(/\bunit\s*(\d{1,3})\s*·\s*(.+?)\s+(?:each session:?\s*)?(?:learn|teach)\s+\d/i);
+      if(!um&&/^\s*each session/i.test(ls[li+1]||'')) um=line.trim().match(/^unit\s*(\d{1,3})\s*·\s*(.{3,60})$/i);           // "Unit 6 · Feelings & Friends" above "Each session: …"
+      if(!um&&plan) um=line.trim().match(/^(\d{1,2})\s+(.{3,60}?)\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\s*[\u2013-]/i);  // lesson plan "1 My Amazing Body Nov 2 – Nov 20"
+      if(um&&!unitNames[+um[1]]) unitNames[+um[1]]=um[2].trim();
+    }); });
   pages.forEach(function(raw){
     var t=wbNorm(raw), L=pageLabel(t);
     if(!L){ var t2=wbDespace(t); if(t2!==t) L=pageLabel(t2); }
     if(!L){ // one worksheet a week: "UNIT 1 · WEEK 1" (or "UNIT 12 · WEEKS 34–36" for a multi-week project)
       var lines=String(raw).split('\n'), wm=null, li=-1;
       for(var q=0;q<Math.min(lines.length,4)&&!wm;q++){ wm=wbNorm(lines[q]).match(/\bunit\s*#?\s*(\d{1,3})\s+weeks?\s*#?\s*(\d{1,3})(?:\s+(\d{1,3}))?\s*$/i); li=q; }
-      if(!wm) return;
+      if(!wm){
+        var pm=null; for(var q2=0;q2<Math.min(lines.length,4)&&!pm;q2++) pm=wbNorm(lines[q2]).match(/\bunit\s*#?\s*(\d{1,3})\s+(?:challenge|project)\s+page\s+(\d{1,2})\s+of\s+(\d{1,2})\s*$/i);
+        if(!pm||+pm[2]!==1||projByUnit[+pm[1]]) return;
+        var pu=+pm[1], ps=lastWeek+1, pe=Math.max(schedMax,ps+(+pm[3])-1), pt='';
+        for(var r2=1;r2<Math.min(lines.length,5);r2++){ var c2=lines[r2].replace(/\s+/g,' ').trim(); if(c2.length>=3&&c2.length<=70&&/[a-z]/i.test(c2)&&!/unit\s*\d/i.test(c2)){ pt=c2; break; } }
+        var pi=mkDraftItem('','Unit '+pu+' Project'+(pt?' · '+pt:''),'project',null,'',null,true); pi.week=pe; pi.wday=1; pi.group='Unit '+pu+(unitNames[pu]?' · '+unitNames[pu]:'')+' · book weeks '+ps+'–'+pe;
+        projByUnit[pu]=pi; gU[pu]=1; items.push(pi); lessons++; return;
+      }
       var u=+wm[1], w1=+wm[2], w2=wm[3]?+wm[3]:null, wkey='W|'+u+'|'+w1+'|'+(w2||'');
+      if(w2&&projByUnit[u]){ projByUnit[u].week=w2; projByUnit[u].group='Unit '+u+(unitNames[u]?' · '+unitNames[u]:'')+' · book weeks '+w1+'–'+w2; return; }
       if(seen[wkey]) return; seen[wkey]=1;
       var wt=''; for(var r=li+1;r<Math.min(lines.length,li+4);r++){ var c=lines[r].replace(/\s+/g,' ').trim(); if(c.length>=3&&c.length<=70&&/[a-z]/i.test(c)&&!/^(?:[A-Za-z&] ){3,}/.test(c)){ wt=c; break; } }
       var wi=mkDraftItem('',(w2?'Unit '+u+' Project':'Week '+w1)+(wt?' · '+wt:''),w2?'project':'daily',null,'',null,true);
-      wi.week=w2||w1; wi.wday=1; wi.group='Unit '+u+(unitNames[u]?' · '+unitNames[u]:'')+(w2?' · Weeks '+w1+'–'+w2:'');
+      wi.week=w2||w1; wi.wday=1; wi.group='Unit '+u+(unitNames[u]?' · '+unitNames[u]:'')+(w2?' · book weeks '+w1+'–'+w2:''); lastWeek=Math.max(lastWeek,w2||w1);
+      if(w2) projByUnit[u]=wi;
       gU[u]=1; items.push(wi); lessons++; return;
     }
     var weekly=L.week!=null;
@@ -1729,6 +1750,8 @@ document.addEventListener('change',function(e){
   if(t.id==='imp-subject'){ importOpts.subject=t.value; if(draft&&draft.items&&t.value!=='auto'){ draft.items.forEach(function(i){i.subject=t.value;}); refreshDraft(); } return; }
   if(t.id==='imp-strict'){ importOpts.strict=t.checked; refreshDraft(); return; }
   if(t.id==='imp-replace'){ importOpts.replace=t.checked; return; }
+  if(t.id==='imp-start'&&draft){ var cw=getCal().weeks||[], ix=0; if(t.value){ ix=cw.findIndex(function(wk){ return wk[wk.length-1]>=t.value; }); if(ix<0){ toast('That date is after the last school week'); t.value=draft.startWeekOf; return; } }
+    draft.startWeekOf=t.value; draft.weekShift=ix; draft.items.forEach(function(i){ if(i.baseWeek) i.week=i.baseWeek+ix; }); refreshDraft(); return; }
   if(t.id==='bulk-subject'&&t.value){ draft.items.forEach(function(i){ if(!i.subject) i.subject=t.value; }); refreshDraft(); return; }
   var dr=t.closest('tr[data-di]'); if(dr&&draft){ var it=draft.items[+dr.dataset.di], df=t.dataset.df; if(df==='include') it.include=t.checked; else it[df]=t.value; if(df!=='title') refreshDraft(); return; }
   // report card
