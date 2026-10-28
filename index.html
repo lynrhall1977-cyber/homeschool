@@ -302,6 +302,9 @@ td.curq,th.curq{background:var(--sand)}
 .rc-foot{margin-top:10px;font-size:7.5pt;color:#888;text-align:right}
 .rc table tr{break-inside:avoid}
 .att-rec .rc-att{margin-bottom:4px}
+.rc-log td:nth-child(2){text-align:left}
+.rc-log th:nth-child(2){text-align:left}
+.rc-log td{font-size:9pt;padding:2px 8px}
 .att-rec .rc-sign{padding-top:26px}
 .att-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px 16px}
 .att-notes{columns:2;column-gap:20px}
@@ -328,6 +331,7 @@ td.curq,th.curq{background:var(--sand)}
       <button class="tab" data-tab="overview">Overview</button>
       <div class="tab-select" id="nav-subject-wrap"><label for="nav-subject">Gradebook</label><select id="nav-subject"></select></div>
       <button class="tab" data-tab="attendance">Attendance</button>
+      <button class="tab" data-tab="reading">Reading log</button>
       <button class="tab" data-tab="reports">Report cards</button>
     </nav>
   </div>
@@ -503,7 +507,7 @@ function defaultState(){
       scaleId:'standard', scale:JSON.parse(JSON.stringify(SCALES.standard.rows)),
       defaultPossible:100
     },
-    assignments:[], reportCards:[], rcDrafts:{}, attendance:{}, pastYears:[]
+    assignments:[], reportCards:[], rcDrafts:{}, attendance:{}, readingLog:[], pastYears:[]
   };
 }
 
@@ -564,6 +568,7 @@ function normalize(s){
   s.rcDrafts=s.rcDrafts||{};
   s.attendance=s.attendance&&typeof s.attendance==='object'?s.attendance:{};
   s.pastYears=Array.isArray(s.pastYears)?s.pastYears:[];
+  s.readingLog=Array.isArray(s.readingLog)?s.readingLog:[];
   if(!(+s.settings.attendanceGoal>0)) s.settings.attendanceGoal=175;
   return s;
 }
@@ -768,7 +773,7 @@ function render(){
   var locked=cloud.on&&!cloud.ready; document.body.classList.toggle('locked',locked);
   if(locked){ renderHeader(); $('#view').innerHTML=viewSignIn(); return; }
   renderHeader();
-  var fn={overview:viewOverview,grades:viewGrades,attendance:viewAttendance,reports:viewReports,settings:viewSettings}[view];
+  var fn={overview:viewOverview,grades:viewGrades,attendance:viewAttendance,reading:viewReading,reports:viewReports,settings:viewSettings}[view];
   $('#view').innerHTML=(liveState?'<div class="callout info archive-bar"><span>You’re viewing <b>'+esc(state.settings.schoolYear||'a past school year')+'</b>'+(state.settings.gradeLevel?' ('+esc(state.settings.gradeLevel)+')':'')+', a past school year. You can look around and print, but changes aren’t saved.</span><button class="btn small primary" data-action="archive-exit">Back to '+esc(liveState.settings.schoolYear||'the current year')+'</button></div>':'')+fn();
   if(view==='reports') refreshPreview();
 }
@@ -1469,6 +1474,56 @@ function rcStandalone(r){
   return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>'+esc(r.student)+' Q'+r.quarter+' Report Card</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Montserrat:wght@500;600;700&display=swap"><style>body{margin:0;background:#eee;padding:24px}.page{width:7.5in;margin:0 auto;background:#fff}.bar{max-width:780px;margin:0 auto 12px;font-family:Arial,sans-serif}@media print{body{background:#fff;padding:0}.bar{display:none}@page{size:letter;margin:.5in}}'+css+'</style></head><body><div class="bar"><button onclick="window.print()" style="font:inherit;padding:8px 14px;cursor:pointer">Print</button></div><div class="page">'+rcHTML(r)+'</div></body></html>';
 }
 
+/* ---------- Reading log ---------- */
+var READ_TYPES=['Poetry','Novel chapter','Short story'];
+var rl={q:'all',type:'all'};
+function rlSorted(){ return state.readingLog.slice().sort(function(a,b){ return a.date===b.date?(b.at||0)-(a.at||0):(a.date<b.date?1:-1); }); }
+function rlTotals(list){ var t={n:list.length,pages:0,by:{}}; READ_TYPES.forEach(function(x){ t.by[x]={n:0,pages:0}; }); list.forEach(function(e){ var p=+e.pages||0; t.pages+=p; var k=t.by[e.type]?e.type:null; if(k){ t.by[k].n++; t.by[k].pages+=p; } }); return t; }
+function viewReading(){
+  var c=getCal(), t=todayISO();
+  var h='<div class="view-head"><div class="grow"><h2>Reading log</h2><p class="muted">Log each reading session with the date, title, pages and type. Totals add up by quarter, and the printed log goes in the portfolio.</p></div>';
+  h+='<div class="row"><button class="btn" data-action="rl-print">Print</button><button class="btn primary" data-action="rl-pdf">Download PDF</button></div></div>';
+  // add form
+  var titles={}; state.readingLog.forEach(function(e){ if(e.title) titles[e.title]=1; });
+  h+='<section class="panel" style="margin-bottom:18px"><h3>Add a reading</h3><form id="rl-form" class="row" style="margin-top:10px" autocomplete="off">';
+  h+='<label class="f" style="flex:0 1 160px">Date<input type="date" id="rl-date" value="'+esc(rl.lastDate||t)+'" required></label>';
+  h+='<label class="f" style="flex:3 1 240px">Title<input id="rl-title" list="rl-titles" required placeholder="e.g. Charlotte’s Web, Chapter 3"><datalist id="rl-titles">'+Object.keys(titles).sort().map(function(x){return '<option value="'+esc(x)+'">';}).join('')+'</datalist></label>';
+  h+='<label class="f" style="flex:0 1 110px"># of pages<input type="number" id="rl-pages" min="0" step="1" inputmode="numeric" required></label>';
+  h+='<label class="f" style="flex:0 1 170px">Type<select id="rl-type">'+READ_TYPES.map(function(x){return '<option'+(rl.lastType===x?' selected':'')+'>'+x+'</option>';}).join('')+'</select></label>';
+  h+='<button class="btn primary" type="submit">Add</button></form></section>';
+  // totals
+  var all=state.readingLog, y=rlTotals(all);
+  h+='<section class="panel" style="margin-bottom:18px"><div class="stats"><div class="stat"><div class="v num">'+y.n+'</div><div class="k">Readings this year</div></div><div class="stat"><div class="v num">'+y.pages+'</div><div class="k">Pages read</div></div>';
+  READ_TYPES.forEach(function(x){ h+='<div class="stat"><div class="v num">'+y.by[x].n+'</div><div class="k">'+({'Poetry':'Poetry','Novel chapter':'Novel chapters','Short story':'Short stories'}[x])+' · '+y.by[x].pages+' pages</div></div>'; });
+  h+='</div>';
+  if(!c.error){ h+='<div class="table-wrap" style="margin-top:14px"><table class="ledger compact"><thead><tr><th class="margin">Quarter</th><th class="r">Readings</th><th class="r">Pages</th>'+READ_TYPES.map(function(x){return '<th class="r">'+x+'</th>';}).join('')+'</tr></thead><tbody>';
+    c.quarters.forEach(function(Q){ var q=rlTotals(all.filter(function(e){return quarterOf(e.date)===Q.n;})); h+='<tr><td class="margin"><b>Q'+Q.n+'</b> <span class="sub">'+fmt(Q.start)+'–'+fmt(Q.end)+'</span></td><td class="r num">'+q.n+'</td><td class="r num">'+q.pages+'</td>'+READ_TYPES.map(function(x){return '<td class="r num">'+q.by[x].n+'</td>';}).join('')+'</tr>'; });
+    h+='</tbody></table></div>'; }
+  h+='</section>';
+  // list
+  var list=rlSorted().filter(function(e){ return (rl.q==='all'||String(quarterOf(e.date))===rl.q)&&(rl.type==='all'||e.type===rl.type); });
+  h+='<div class="row" style="margin-bottom:10px"><label class="f" style="flex:0 1 170px">Quarter<select id="rl-fq"><option value="all">Whole year</option>'+[1,2,3,4].map(function(n){return '<option value="'+n+'"'+(rl.q===String(n)?' selected':'')+'>Quarter '+n+'</option>';}).join('')+'</select></label><label class="f" style="flex:0 1 190px">Type<select id="rl-ft"><option value="all">All types</option>'+READ_TYPES.map(function(x){return '<option'+(rl.type===x?' selected':'')+'>'+x+'</option>';}).join('')+'</select></label></div>';
+  if(!list.length) return h+'<div class="panel empty"><h3>'+(all.length?'Nothing matches these filters':'No readings logged yet')+'</h3><p>'+(all.length?'Try “Whole year” or “All types”.':'Add the first one above. Titles you’ve used before are suggested as you type.')+'</p></div>';
+  h+='<div class="table-wrap"><table class="ledger" id="rl-grid"><thead><tr><th class="margin">Date</th><th>Title</th><th class="r"># of pages</th><th>Type</th><th class="c"><span class="sub" style="text-transform:none;letter-spacing:0">Delete</span></th></tr></thead><tbody>';
+  list.forEach(function(e){ h+='<tr data-rid="'+e.id+'"><td class="margin"><input class="d" type="date" data-rl="date" value="'+esc(e.date)+'" aria-label="Date"></td><td><input class="t" data-rl="title" value="'+esc(e.title)+'" aria-label="Title"></td><td class="r"><input class="score" type="number" min="0" data-rl="pages" value="'+esc(e.pages)+'" aria-label="Pages"></td><td><select data-rl="type" aria-label="Type">'+READ_TYPES.map(function(x){return '<option'+(e.type===x?' selected':'')+'>'+x+'</option>';}).join('')+'</select></td><td class="c"><button class="icon-btn" data-action="rl-del" aria-label="Delete reading" title="Delete reading">✕</button></td></tr>'; });
+  h+='</tbody></table></div><p class="sub" style="margin-top:8px">'+list.length+' reading'+(list.length===1?'':'s')+' · '+rlTotals(list).pages+' pages shown.</p>';
+  return h;
+}
+function rlRecordHTML(){
+  var s=state.settings, c=getCal(), all=state.readingLog, y=rlTotals(all), t=todayISO();
+  var h='<div class="rc"><div class="rc-head"><div class="rc-school">'+esc(s.schoolName||'Home School')+'</div><div class="rc-title">Reading Log · '+esc(s.schoolYear)+'</div></div>';
+  h+='<div class="rc-meta"><div><b>Student</b><span>'+esc(s.studentName)+'</span></div><div><b>Grade</b><span>'+esc(s.gradeLevel)+'</span></div><div><b>School year</b><span>'+esc(fmtLong(s.startDate))+(c.end?' – '+esc(fmtLong(c.end)):'')+'</span></div><div><b>As of</b><span>'+esc(fmtLong(t))+'</span></div></div>';
+  h+='<table class="rc-att"><thead><tr><th></th><th>Readings</th><th>Pages</th>'+READ_TYPES.map(function(x){return '<th>'+x+'</th>';}).join('')+'</tr></thead><tbody>';
+  (c.quarters||[]).forEach(function(Q){ var q=rlTotals(all.filter(function(e){return quarterOf(e.date)===Q.n;})); h+='<tr><td>Quarter '+Q.n+' ('+esc(fmt(Q.start))+' – '+esc(fmt(Q.end))+')</td><td>'+q.n+'</td><td>'+q.pages+'</td>'+READ_TYPES.map(function(x){return '<td>'+q.by[x].n+'</td>';}).join('')+'</tr>'; });
+  h+='<tr><td><b>Year</b></td><td><b>'+y.n+'</b></td><td><b>'+y.pages+'</b></td>'+READ_TYPES.map(function(x){return '<td><b>'+y.by[x].n+'</b></td>';}).join('')+'</tr></tbody></table>';
+  h+='<div class="rc-sec"><h4>Readings</h4><table class="rc-att rc-log"><thead><tr><th>Date</th><th>Title</th><th>Type</th><th>Pages</th></tr></thead><tbody>';
+  var list=state.readingLog.slice().sort(function(a,b){ return a.date===b.date?(a.at||0)-(b.at||0):(a.date<b.date?-1:1); });
+  if(!list.length) h+='<tr><td colspan="4" style="text-align:center;color:#888">No readings logged yet.</td></tr>';
+  list.forEach(function(e){ h+='<tr><td>'+esc(fmt(e.date,{y:1}))+'</td><td>'+esc(e.title)+'</td><td>'+esc(e.type)+'</td><td>'+esc(e.pages)+'</td></tr>'; });
+  h+='</tbody></table></div><div class="rc-sign"><div>Teacher signature &amp; date</div><div>Parent signature &amp; date</div></div></div>';
+  return h;
+}
+
 /* ---------- New school year ---------- */
 var ny={open:false};
 function bumpYear(label){ var m=String(label||'').match(/(\d{4})\D+(\d{2,4})/); if(m){ var a=+m[1]+1, b=+m[2]; b=b<100?(b+1)%100:b+1; return a+'–'+(b<100?pad(b):b); } var y=String(label||'').match(/(\d{4})/); return y?(+y[1]+1)+'–'+(+y[1]+2):''; }
@@ -1492,9 +1547,9 @@ function startNewYear(){
   if(!label||!start||!(days>=4&&days<=400)){ toast('Fill in the school year, first day, and number of school days (4–400).'); return; }
   if(start<=s.startDate){ toast('The new first day has to come after this year’s first day.'); return; }
   if($('#ny-backup').checked) download('gradebook-backup-'+slug(s.schoolYear||'school-year')+'.json',JSON.stringify(state,null,1),'application/json');
-  var c=getCal(), snap=JSON.parse(JSON.stringify({settings:s,assignments:state.assignments,reportCards:state.reportCards,rcDrafts:state.rcDrafts,attendance:state.attendance}));
+  var c=getCal(), snap=JSON.parse(JSON.stringify({settings:s,assignments:state.assignments,reportCards:state.reportCards,rcDrafts:state.rcDrafts,attendance:state.attendance,readingLog:state.readingLog}));
   state.pastYears.unshift({id:uid(),schoolYear:s.schoolYear,gradeLevel:s.gradeLevel,start:s.startDate,end:c.end||'',archivedAt:new Date().toISOString(),data:snap});
-  state.assignments=[]; state.reportCards=[]; state.rcDrafts={}; state.attendance={};
+  state.assignments=[]; state.reportCards=[]; state.rcDrafts={}; state.attendance={}; state.readingLog=[];
   s.schoolYear=label; s.gradeLevel=grade; s.startDate=start; s.schoolDays=days; s.breaks=[]; s.extraDays=[]; s.customQuarterEnds=['','',''];
   ny.open=false; gb.quarter=null; rc.quarter=null; rc.viewing=null; att.sel=null; draft=null;
   save(); go('overview'); toast(label+' started. Last year is saved under Settings → Backup.');
@@ -1755,6 +1810,9 @@ document.addEventListener('click',function(e){
     case 'att-set': { var k=att.sel, rec=state.attendance[k]||{}; rec.s=b.dataset.st; if(rec.s==='P'&&!rec.n) delete state.attendance[k]; else { if(rec.s==='P') delete rec.s; state.attendance[k]=rec; } save(); toast(fmt(k,{wd:1})+': '+ATT_LABEL[b.dataset.st]); render(); break; }
     case 'att-step': { var dd=getCal().days, ix=dd.indexOf(att.sel)+(+b.dataset.dir); if(ix>=0&&ix<dd.length){ att.sel=dd[ix]; render(); } break; }
     case 'att-print': printHTML(attRecordHTML()); break;
+    case 'rl-print': printHTML(rlRecordHTML()); break;
+    case 'rl-pdf': downloadPDF(rlRecordHTML(),slug(s.studentName)+'-reading-log-'+slug(s.schoolYear)+'.pdf'); break;
+    case 'rl-del': { var rtr=b.closest('tr'), rid=rtr.dataset.rid; arm(b,'rl'+rid,'✓',function(){ state.readingLog=state.readingLog.filter(function(x){return x.id!==rid;}); save(); render(); toast('Reading deleted'); }); break; }
     case 'att-pdf': downloadPDF(attRecordHTML(),slug(s.studentName)+'-attendance-'+slug(s.schoolYear)+'.pdf'); break;
     case 'rc-pdf-now': { var sn=buildSnapshot(rc.quarter); downloadPDF(rcHTML(sn),slug(sn.student)+'-q'+sn.quarter+'-report-card-'+slug(sn.schoolYear)+'.pdf'); break; }
     case 'rc-pdf': { var rp=state.reportCards.filter(function(x){return x.id===b.dataset.id;})[0]; if(rp) downloadPDF(rcHTML(rp),slug(rp.student)+'-q'+rp.quarter+'-report-card-'+slug(rp.schoolYear)+'.pdf'); break; }
@@ -1803,6 +1861,11 @@ document.addEventListener('change',function(e){
     else if(f==='possible') a.possible=+t.value||0;
     else if(f==='score'){ var p=parseScore(t.value,a.possible); if(!p){ toast('Use a number, 8/10, or 80%'); t.value=a.earned==null?'':a.earned; return; } a.earned=p.earned; if(p.possible!=null){ a.possible=p.possible; tr.querySelector('[data-f="possible"]').value=p.possible; } t.value=a.earned==null?'':+(+a.earned).toFixed(2); }
     save(); refreshRow(tr,a); return; }
+  var rtr=t.closest('#rl-grid tr[data-rid]'); if(rtr&&t.dataset.rl){ var re_=state.readingLog.filter(function(x){return x.id===rtr.dataset.rid;})[0]; if(!re_) return; var f=t.dataset.rl;
+    if(f==='pages') re_.pages=Math.max(0,Math.round(+t.value||0)); else if(f==='title'){ if(!t.value.trim()){ t.value=re_.title; return; } re_.title=t.value.trim(); } else if(f==='date'){ if(!t.value){ t.value=re_.date; return; } re_.date=t.value; } else re_[f]=t.value;
+    save(); if(f==='date'||f==='pages'||f==='type') render(); return; }
+  if(t.id==='rl-fq'){ rl.q=t.value; render(); return; }
+  if(t.id==='rl-ft'){ rl.type=t.value; render(); return; }
   if(t.id==='gb-quarter'){ gb.quarter=t.value; render(); return; }
   if(t.id==='nav-subject'||t.id==='book-subject'){ if(t.value){ gb.subject=t.value; gb.q=''; go('grades'); } return; }
   if(t.id==='gb-status'){ gb.status=t.value; $('#gb-table').innerHTML=gradesTable(); return; }
@@ -1848,6 +1911,10 @@ document.addEventListener('keydown',function(e){
   if((e.key==='Enter'||e.key===' ')&&t.id==='drop'){ e.preventDefault(); $('#file-curr').click(); }
 });
 document.addEventListener('submit',function(e){
+  if(e.target.id==='rl-form'){ e.preventDefault(); var rt=$('#rl-title').value.trim(), rp=$('#rl-pages').value, rd=$('#rl-date').value, ry=$('#rl-type').value;
+    if(!rt||!rd||rp===''){ toast('Add the date, title and number of pages.'); return; }
+    state.readingLog.push({id:uid(),date:rd,title:rt,pages:Math.max(0,Math.round(+rp)),type:ry,at:Date.now()}); rl.lastDate=rd; rl.lastType=ry;
+    save(); toast('Added: '+rt); render(); var ti=$('#rl-title'); if(ti) ti.focus(); return; }
   if(e.target.id==='si-form'){ e.preventDefault(); var em=$('#si-email').value.trim(); if(!em) return; var btn=e.target.querySelector('button'); btn.disabled=true; btn.textContent='Sending…';
     cloud.client.auth.signInWithOtp({email:em,options:{shouldCreateUser:false,emailRedirectTo:location.origin+location.pathname}}).then(function(r){
       if(r.error){ var m=r.error.message||''; cloud.msg=/sign ?ups? not allowed|not found|not allowed/i.test(m)?'That email isn’t set up for this gradebook. Add it as a user in Supabase (README, step 3).':/rate|seconds/i.test(m)?'Too many sign-in emails were sent. Wait a few minutes, then try again.':m; }
