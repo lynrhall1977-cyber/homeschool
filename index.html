@@ -431,16 +431,17 @@ function computeCalendar(s){
 /* Test-last weeks (Spelling): Day 5 is the test on the week's last school day Mon–Fri (Friday, or the day
    before when Friday is off). Days 1–4 fit into the school days before it and never share the test day;
    with fewer than 4 days, the later days double up (3 days: Day 3 and Day 4 share). */
-function placeTestLast(weekDays,wday){
+function placeTestLast(weekDays,wday,P){
+  P=P||4;
   if(!weekDays||!weekDays.length) return '';
   var wkdays=weekDays.filter(function(k){ var w=parseISO(k).getUTCDay(); return w>=1&&w<=5; });
   if(!wkdays.length) wkdays=weekDays.slice();
   var test=wkdays[wkdays.length-1];
-  if(wday>=5) return test;
+  if(wday>P) return test;
   var prac=weekDays.filter(function(k){ return k<test; }), n=prac.length;
   if(!n) return test;
-  if(n>=4) return prac[Math.min(wday,n)-1];
-  return prac[n-1-Math.floor((4-wday)*n/4)];
+  if(n>=P) return prac[Math.min(wday,n)-1];
+  return prac[n-1-Math.floor((P-wday)*n/P)];
 }
 function placeWeekDay(weekDays,meet,wday){
   var byWd={}; (weekDays||[]).forEach(function(k){ byWd[parseISO(k).getUTCDay()]=k; });
@@ -465,7 +466,7 @@ function placeWeekDay(weekDays,meet,wday){
 var SUBJECTS=['Math','Language Arts','Science','Social Studies','Spelling','Health & Physical Education','Library Skills','Fine Arts'];
 var SUBJECT_ALIASES={
   'Math':['math','maths','mathematics','arithmetic','math loops'],
-  'Language Arts':['language arts','phonics & reading','phonics and reading','phonics','reading','ela','english','grammar','language arts loops','reading loops'],
+  'Language Arts':['language arts','phonics & reading','phonics and reading','phonics','reading','ela','english','grammar','writing','handwriting','penmanship','language arts loops','reading loops'],
   'Science':['science','science explorers'],
   'Social Studies':['social studies','history','geography','civics','social studies explorers'],
   'Spelling':['spelling','spelling steps'],
@@ -671,10 +672,14 @@ function viewSignIn(){
 
 /* ---------- calendar + grades ---------- */
 var cal=null;
-function getCal(){ if(!cal) cal=computeCalendar(state.settings); return cal; }
+var pracCache={};
+function getCal(){ if(!cal){ cal=computeCalendar(state.settings); pracCache={}; } return cal; }
+/* Practice days per week before a Friday test: 5 when the workbook has a Day 5 practice page, else 4 */
+function practiceDays(subject){ if(pracCache[subject]==null){ var m=4; state.assignments.forEach(function(x){ if(x.subject===subject&&x.week&&x.type!=='test'&&x.wday>m) m=Math.min(5,x.wday); }); pracCache[subject]=m; } return pracCache[subject]; }
 function itemDate(a){
   if(a.date) return a.date; var c=getCal();
-  if(a.week){ var wk=c.weeks&&c.weeks[a.week-1]; if(!wk) return ''; return testLast(a.subject)?placeTestLast(wk,Math.max(a.wday||1,1)):placeWeekDay(wk,meetDays(a.subject),Math.max(a.wday||1,1)); }
+  if(a.week){ var wk=c.weeks&&c.weeks[a.week-1]; if(!wk) return ''; if(testLast(a.subject)){ var P=Math.max(practiceDays(a.subject),a.type!=='test'?Math.min(a.wday||1,5):4); return placeTestLast(wk,a.type==='test'?99:Math.max(a.wday||1,1),P); }
+  return placeWeekDay(wk,meetDays(a.subject),Math.max(a.wday||1,1)); }
   if(a.day&&c.days[a.day-1]) return c.days[a.day-1]; return '';
 }
 function testLast(subject){ var t=state.settings.testLast; return !!(t&&t[subject]); }
@@ -1261,6 +1266,7 @@ function parseTable(rows,sheetSubject){
       else if(/^(day|day ?#|day number|school day|lesson day)\b/.test(t)&&t.length<16){m.day=j;hits++;}
       else if(/^week\b/.test(t)&&t.length<10){m.week=j;}
       else if(/^(group|unit|section|book)\b/.test(t)&&t.length<16){m.group=j;}
+      else if(/^(score|grade|earned|points earned|mark)\b/.test(t)&&t.length<16){m.score=j;hits++;}
       else if(/^(points|possible|total|max|out of)/.test(t)){m.points=j;hits++;}
       else if(/^(lesson|assignment|title|activity|task|description|topic|work|item|name)/.test(t)&&m.title==null){m.title=j;hits++;}
       else { var sub=t.length<45?matchSubject(t):''; if(sub){ m.subjectCols.push({j:j,s:sub}); hits++; } }
@@ -1292,6 +1298,7 @@ function parseTable(rows,sheetSubject){
     var it=mkDraftItem(subj,title,type,day,map.date!=null?toISODate(r[map.date]):'',map.points!=null?parseFloat(cellStr(r[map.points])):null,true);
     // "Week 3 / Day 2" rows go on that school week, using the subject's weekly schedule (and the Friday-test rule)
     var wk=map.week!=null?parseInt(cellStr(r[map.week]),10):0; if(wk&&day&&day<=5&&!it.date){ it.week=wk; it.wday=day; it.day=null; }
+    if(map.score!=null){ var sv=cellStr(r[map.score]); if(sv){ var ps=parseScore(sv,it.possible||+state.settings.defaultPossible||100); if(ps&&ps.earned!=null){ it.earned=ps.earned; if(ps.possible) it.possible=ps.possible; } } }
     if(map.group!=null){ var gv=cellStr(r[map.group]); if(gv) it.group=/^\d+$/.test(gv)?'Unit '+gv:gv; }
     out.push(it);
   });
@@ -1331,7 +1338,7 @@ function doImport(){
   if(!items.length) return;
   if(importOpts.replace){ var subs={}; items.forEach(function(i){subs[i.subject]=1;}); state.assignments=state.assignments.filter(function(a){return !(a.source==='import'&&subs[a.subject]);}); }
   var base=state.assignments.length, defP=+state.settings.defaultPossible||100;
-  items.forEach(function(i,k){ state.assignments.push({id:uid(),subject:i.subject,title:i.title,type:i.type,date:i.date||'',day:(i.date||i.week)?null:i.day,week:i.date?null:(i.week||null),wday:i.date?null:(i.wday||null),group:i.group||'',possible:i.possible||defP,earned:null,excused:false,notes:'',source:'import',order:base+k}); });
+  items.forEach(function(i,k){ state.assignments.push({id:uid(),subject:i.subject,title:i.title,type:i.type,date:i.date||'',day:(i.date||i.week)?null:i.day,week:i.date?null:(i.week||null),wday:i.date?null:(i.wday||null),group:i.group||'',possible:i.possible||defP,earned:(i.earned==null?null:i.earned),excused:false,notes:'',source:'import',order:base+k}); });
   save(); var n=items.length, first=items[0].subject; draft=null; toast('Added '+n+' assignments'); gb.subject=first; gb.quarter=null; gb.status='all'; go('grades');
 }
 
