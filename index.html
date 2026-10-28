@@ -272,7 +272,7 @@ td.curq,th.curq{background:var(--sand)}
 </style>
 <style id="rc-style">
 /* Report card: printed document, fixed white paper look per the workbook guide (navy labels, charcoal ink, #CDD5DA rules) */
-.rc{font-family:"Atkinson Hyperlegible",Arial,sans-serif;color:#27313B;width:7.5in;min-height:9.9in;padding:.38in .42in .32in;border:2px solid #183153;font-size:10pt;line-height:1.4;background:#fff;display:flex;flex-direction:column}
+.rc{box-sizing:border-box;font-family:"Atkinson Hyperlegible",Arial,sans-serif;color:#27313B;width:7.5in;min-height:9.9in;padding:.38in .42in .32in;border:2px solid #183153;font-size:10pt;line-height:1.4;background:#fff;display:flex;flex-direction:column}
 .rc *{box-sizing:border-box}
 .rc-head{text-align:center;border-bottom:3px solid #183153;padding-bottom:9px;margin-bottom:12px}
 .rc-school{font-family:"Montserrat",Arial,sans-serif;font-weight:700;font-size:18pt;color:#183153;line-height:1.2}
@@ -283,11 +283,12 @@ td.curq,th.curq{background:var(--sand)}
 .rc table{border-collapse:collapse;width:100%}
 .rc-grades th{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#444;background:#EAF2F7;border:1px solid #CDD5DA;padding:6px 8px;text-align:center}
 .rc-grades th:first-child{text-align:left}
-.rc-grades td{border:1px solid #CDD5DA;padding:4px 8px;text-align:center}
+.rc-grades td{border:1px solid #CDD5DA;padding:5px 8px;text-align:center;white-space:nowrap}
+.rc-grades td:first-child{white-space:normal}
 .rc-grades td:first-child{text-align:left;font-weight:700;border-right:2px solid #183153}
 .rc-grades .cur{background:#F3EBDD}
 .rc-grades .L{font-family:"Montserrat",Arial,sans-serif;font-weight:700;font-size:12.5pt;color:#183153}
-.rc-grades .P{display:block;font-size:7.5pt;line-height:1.1;color:#666;font-family:"Montserrat",Arial,sans-serif}
+.rc-grades .P{display:inline;margin-left:5px;font-size:8pt;line-height:1.1;color:#666;font-family:"Montserrat",Arial,sans-serif}
 .rc-grades .na{color:#bbb}
 .rc-sec{margin-top:12px;break-inside:avoid}
 .rc-sec h4{margin:0 0 6px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#183153}
@@ -297,7 +298,7 @@ td.curq,th.curq{background:var(--sand)}
 .rc-comment{padding:4px 0;border-bottom:1px dotted #ccc;break-inside:avoid}
 .rc-comment b{color:#183153}
 .rc-scale{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:11px;color:#444}
-.rc-sign{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:auto;padding-top:34px;break-inside:avoid}
+.rc-sign{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:auto;padding-top:28px;break-inside:avoid}
 .rc-sign div{border-top:1px solid #333;padding-top:4px;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#555}
 .rc-foot{margin-top:10px;font-size:7.5pt;color:#888;text-align:right}
 .rc table tr{break-inside:avoid}
