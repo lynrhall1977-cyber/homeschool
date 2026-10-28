@@ -1482,7 +1482,18 @@ function rlTotals(list){ var t={n:list.length,pages:0,by:{}}; READ_TYPES.forEach
 function viewReading(){
   var c=getCal(), t=todayISO();
   var h='<div class="view-head"><div class="grow"><h2>Reading log</h2><p class="muted">Log each reading session with the date, title, pages and type. Totals add up by quarter, and the printed log goes in the portfolio.</p></div>';
-  h+='<div class="row"><button class="btn" data-action="rl-print">Print</button><button class="btn primary" data-action="rl-pdf">Download PDF</button></div></div>';
+  h+='<div class="row"><button class="btn" data-action="rl-import">Import from a spreadsheet</button><button class="btn" data-action="rl-print">Print</button><button class="btn primary" data-action="rl-pdf">Download PDF</button></div></div>';
+  h+='<input type="file" id="rl-file" accept=".csv,.tsv,.txt,.xlsx,.xls" hidden>';
+  if(rl.pending){ var pd=rl.pending;
+    h+='<section class="panel" style="margin-bottom:18px;border-color:var(--navy)"><h3>Import '+esc(pd.name)+'</h3>';
+    if(pd.error) h+='<div class="callout err" style="margin-top:10px"><span>'+esc(pd.error)+'</span></div><div class="row" style="margin-top:12px"><button class="btn" data-action="rl-imp-cancel">Close</button></div></section>';
+    else { var tot=pd.rows.reduce(function(a,e){return a+e.pages;},0);
+      h+='<p style="margin:8px 0">Found <b>'+pd.rows.length+' reading'+(pd.rows.length===1?'':'s')+'</b> ('+tot+' pages)'+(pd.rows.length?', '+esc(fmt(pd.rows[0].date,{y:1}))+' to '+esc(fmt(pd.rows[pd.rows.length-1].date,{y:1})):'')+'.</p>';
+      var notes=[]; if(pd.dupes) notes.push(pd.dupes+' already in your log, so they’ll be skipped'); if(pd.guessed) notes.push(pd.guessed+' had no type I could match, so they’re set to <b>'+esc(pd.defType)+'</b>. You can change them after importing'); if(pd.skipped) notes.push(pd.skipped+' row'+(pd.skipped===1?'':'s')+' had no date or title and won’t be imported');
+      if(notes.length) h+='<ul class="sub" style="margin:0 0 10px 18px">'+notes.map(function(n){return '<li>'+n+'</li>';}).join('')+'</ul>';
+      h+='<div class="table-wrap" style="max-height:260px;overflow:auto"><table class="ledger compact"><thead><tr><th class="margin">Date</th><th>Title</th><th class="r">Pages</th><th>Type</th></tr></thead><tbody>'+pd.rows.slice(0,200).map(function(e){return '<tr><td class="margin">'+esc(fmt(e.date,{y:1}))+'</td><td>'+esc(e.title)+'</td><td class="r num">'+e.pages+'</td><td>'+esc(e.type)+(e.guessed?' <span class="tag warn">guessed</span>':'')+'</td></tr>';}).join('')+'</tbody></table></div>';
+      h+='<div class="row" style="margin-top:12px"><button class="btn primary" data-action="rl-imp-go"'+(pd.rows.length-pd.dupes>0?'':' disabled')+'>Add '+(pd.rows.length-pd.dupes)+' reading'+(pd.rows.length-pd.dupes===1?'':'s')+'</button><button class="btn" data-action="rl-imp-cancel">Cancel</button></div></section>'; }
+  }
   // add form
   var titles={}; state.readingLog.forEach(function(e){ if(e.title) titles[e.title]=1; });
   h+='<section class="panel" style="margin-bottom:18px"><h3>Add a reading</h3><form id="rl-form" class="row" style="margin-top:10px" autocomplete="off">';
@@ -1508,6 +1519,33 @@ function viewReading(){
   list.forEach(function(e){ h+='<tr data-rid="'+e.id+'"><td class="margin"><input class="d" type="date" data-rl="date" value="'+esc(e.date)+'" aria-label="Date"></td><td><input class="t" data-rl="title" value="'+esc(e.title)+'" aria-label="Title"></td><td class="r"><input class="score" type="number" min="0" data-rl="pages" value="'+esc(e.pages)+'" aria-label="Pages"></td><td><select data-rl="type" aria-label="Type">'+READ_TYPES.map(function(x){return '<option'+(e.type===x?' selected':'')+'>'+x+'</option>';}).join('')+'</select></td><td class="c"><button class="icon-btn" data-action="rl-del" aria-label="Delete reading" title="Delete reading">✕</button></td></tr>'; });
   h+='</tbody></table></div><p class="sub" style="margin-top:8px">'+list.length+' reading'+(list.length===1?'':'s')+' · '+rlTotals(list).pages+' pages shown.</p>';
   return h;
+}
+/* Reading-log import: finds Date / Title / Pages / Type columns by their headers */
+function rlType(v){ v=String(v||'').toLowerCase(); if(/poem|poet|verse/.test(v)) return 'Poetry'; if(/short|stor(y|ies)|fable|tale/.test(v)) return 'Short story'; if(/chap|novel|ch\.|book/.test(v)) return 'Novel chapter'; return ''; }
+function rlPages(v){ v=String(v==null?'':v).trim(); var m=v.match(/^(?:pp?\.?\s*)?(\d+)\s*[-–—]\s*(\d+)$/i); if(m&&+m[2]>=+m[1]) return +m[2]-+m[1]+1; m=v.match(/(\d+)/); return m?+m[1]:0; }
+function rlParse(rows,name){
+  rows=rows.filter(function(r){ return r&&r.some(function(c){return cellStr(c)!=='';}); });
+  var hi=-1, m=null;
+  for(var i=0;i<Math.min(rows.length,10)&&!m;i++){ var x={}; rows[i].forEach(function(c,j){ var t=cellStr(c).toLowerCase(); if(!t) return;
+      if(x.date==null&&/^(date|day|when)\b/.test(t)) x.date=j; else if(x.pages==null&&/page|^pp?\.?$|^#\s*of/.test(t)) x.pages=j; else if(x.type==null&&/^(type|kind|genre|category|format|reading type)\b/.test(t)) x.type=j; else if(x.title==null&&/title|book|reading|story|name|what/.test(t)) x.title=j; });
+    if(x.date!=null&&x.title!=null){ m=x; hi=i; } }
+  if(!m) return {name:name,error:'I couldn’t find Date and Title columns in '+name+'. Make sure the first row has headings such as Date, Title, Pages and Type.'};
+  var have={}; state.readingLog.forEach(function(e){ have[e.date+'|'+e.title.toLowerCase()+'|'+e.pages]=1; });
+  var out=[], skipped=0, guessed=0, dupes=0, defType=READ_TYPES[1];
+  rows.slice(hi+1).forEach(function(r){
+    var d=toISODate(r[m.date]), t=cellStr(r[m.title]); if(!d||!t){ if(cellStr(r[m.title])||cellStr(r[m.date])) skipped++; return; }
+    var ty=m.type!=null?rlType(cellStr(r[m.type])):''; if(!ty) ty=rlType(t); var g=!ty; if(g){ ty=defType; guessed++; }
+    var e={date:d,title:t,pages:m.pages!=null?rlPages(r[m.pages]):0,type:ty,guessed:g}; if(have[d+'|'+t.toLowerCase()+'|'+e.pages]){ e.dupe=true; dupes++; } out.push(e);
+  });
+  out.sort(function(a,b){return a.date<b.date?-1:a.date>b.date?1:0;});
+  if(!out.length) return {name:name,error:'No readings with a date and title were found in '+name+'.'};
+  return {name:name,rows:out,skipped:skipped,guessed:guessed,dupes:dupes,defType:defType};
+}
+function rlReadFile(file){
+  var ext=(file.name.split('.').pop()||'').toLowerCase();
+  var p=(ext==='xlsx'||ext==='xls')?(window.XLSX?Promise.resolve():loadScript(LIBS.xlsx)).then(function(){ return readAs(file,'buf'); }).then(function(buf){ var wb=XLSX.read(buf,{type:'array',cellDates:true}); var best=null; wb.SheetNames.forEach(function(n){ var r=rlParse(XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,raw:true,defval:''}),file.name); if(!best||(r.rows&&(!best.rows||r.rows.length>best.rows.length))) best=r; }); return best; })
+    : readAs(file,'text').then(function(t){ return rlParse(parseCSV(t,ext==='tsv'?'\t':null),file.name); });
+  p.then(function(r){ rl.pending=r; render(); }).catch(function(e){ rl.pending={name:file.name,error:(e&&e.message)||'That file couldn’t be read.'}; render(); });
 }
 function rlRecordHTML(){
   var s=state.settings, c=getCal(), all=state.readingLog, y=rlTotals(all), t=todayISO();
@@ -1810,6 +1848,9 @@ document.addEventListener('click',function(e){
     case 'att-set': { var k=att.sel, rec=state.attendance[k]||{}; rec.s=b.dataset.st; if(rec.s==='P'&&!rec.n) delete state.attendance[k]; else { if(rec.s==='P') delete rec.s; state.attendance[k]=rec; } save(); toast(fmt(k,{wd:1})+': '+ATT_LABEL[b.dataset.st]); render(); break; }
     case 'att-step': { var dd=getCal().days, ix=dd.indexOf(att.sel)+(+b.dataset.dir); if(ix>=0&&ix<dd.length){ att.sel=dd[ix]; render(); } break; }
     case 'att-print': printHTML(attRecordHTML()); break;
+    case 'rl-import': $('#rl-file').click(); break;
+    case 'rl-imp-cancel': rl.pending=null; render(); break;
+    case 'rl-imp-go': { var add=rl.pending.rows.filter(function(e){return !e.dupe;}), now=Date.now(); add.forEach(function(e,i){ state.readingLog.push({id:uid(),date:e.date,title:e.title,pages:e.pages,type:e.type,at:now+i}); }); rl.pending=null; save(); render(); toast('Added '+add.length+' reading'+(add.length===1?'':'s')); break; }
     case 'rl-print': printHTML(rlRecordHTML()); break;
     case 'rl-pdf': downloadPDF(rlRecordHTML(),slug(s.studentName)+'-reading-log-'+slug(s.schoolYear)+'.pdf'); break;
     case 'rl-del': { var rtr=b.closest('tr'), rid=rtr.dataset.rid; arm(b,'rl'+rid,'✓',function(){ state.readingLog=state.readingLog.filter(function(x){return x.id!==rid;}); save(); render(); toast('Reading deleted'); }); break; }
@@ -1864,6 +1905,7 @@ document.addEventListener('change',function(e){
   var rtr=t.closest('#rl-grid tr[data-rid]'); if(rtr&&t.dataset.rl){ var re_=state.readingLog.filter(function(x){return x.id===rtr.dataset.rid;})[0]; if(!re_) return; var f=t.dataset.rl;
     if(f==='pages') re_.pages=Math.max(0,Math.round(+t.value||0)); else if(f==='title'){ if(!t.value.trim()){ t.value=re_.title; return; } re_.title=t.value.trim(); } else if(f==='date'){ if(!t.value){ t.value=re_.date; return; } re_.date=t.value; } else re_[f]=t.value;
     save(); if(f==='date'||f==='pages'||f==='type') render(); return; }
+  if(t.id==='rl-file'){ if(t.files[0]) rlReadFile(t.files[0]); t.value=''; return; }
   if(t.id==='rl-fq'){ rl.q=t.value; render(); return; }
   if(t.id==='rl-ft'){ rl.type=t.value; render(); return; }
   if(t.id==='gb-quarter'){ gb.quarter=t.value; render(); return; }
