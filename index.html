@@ -110,6 +110,7 @@ body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset
 body.locked .tabs,body.locked #settings-btn,body.locked #hdr-q{display:none}
 .saved.sync-saving,.saved.sync-loading{color:var(--explorer)}
 .saved.sync-offline,.saved.sync-error{color:var(--warn);font-weight:700}
+.archive-bar{margin-bottom:18px}
 .book-head{display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px;padding-top:14px;margin-bottom:18px}
 .book-head .grow{flex:1 1 260px;min-width:0}
 .book-nav{display:flex;align-items:center;gap:6px}
@@ -502,7 +503,7 @@ function defaultState(){
       scaleId:'standard', scale:JSON.parse(JSON.stringify(SCALES.standard.rows)),
       defaultPossible:100
     },
-    assignments:[], reportCards:[], rcDrafts:{}, attendance:{}
+    assignments:[], reportCards:[], rcDrafts:{}, attendance:{}, pastYears:[]
   };
 }
 
@@ -562,11 +563,14 @@ function normalize(s){
   s.reportCards=Array.isArray(s.reportCards)?s.reportCards:[];
   s.rcDrafts=s.rcDrafts||{};
   s.attendance=s.attendance&&typeof s.attendance==='object'?s.attendance:{};
+  s.pastYears=Array.isArray(s.pastYears)?s.pastYears:[];
   if(!(+s.settings.attendanceGoal>0)) s.settings.attendanceGoal=175;
   return s;
 }
 var saveTimer=null;
+var liveState=null; // set while a past school year is open (read-only)
 function save(){
+  if(liveState){ cal=null; toast('This is a past school year, so changes here aren’t saved.'); return; }
   state.updatedAt=Date.now();
   clearTimeout(saveTimer);
   saveTimer=setTimeout(function(){
@@ -586,7 +590,7 @@ var cloud={on:!!(CLOUD_CONFIG.url&&CLOUD_CONFIG.anonKey),client:null,user:null,r
 var CLOUD_CACHE=STORE_KEY+'-cloud', CLOUD_PENDING=STORE_KEY+'-cloud-pending';
 function cloudSet(st,msg){ cloud.status=st; cloud.msg=msg||''; if(state) renderHeader(); }
 function cloudPending(v){ try{ if(v===undefined) return JSON.parse(localStorage.getItem(CLOUD_PENDING)||'null'); if(v) localStorage.setItem(CLOUD_PENDING,JSON.stringify(v)); else localStorage.removeItem(CLOUD_PENDING); }catch(e){ return null; } }
-function cloudCache(){ try{ localStorage.setItem(CLOUD_CACHE,JSON.stringify(state)); }catch(e){} }
+function cloudCache(){ try{ localStorage.setItem(CLOUD_CACHE,JSON.stringify(liveState||state)); }catch(e){} }
 function cloudBoot(){
   cloudSet('loading');
   loadScript(SUPA_LIB).then(function(){
@@ -616,7 +620,7 @@ function cloudPull(initial){
     else if(pend&&pend.baseRev===row.rev){ cloud.rev=row.rev; cloudSet('saving'); cloudPush(); }     // this device has unsent changes and nothing newer exists
     else {
       if(pend) toast('Changes made here while offline were replaced by newer changes from another device.');
-      cloudPending(null); state=normalize(row.data); cloud.rev=row.rev; cloudCache(); cal=null; cloudSet('saved');
+      cloudPending(null); if(liveState) liveState=normalize(row.data); else state=normalize(row.data); cloud.rev=row.rev; cloudCache(); cal=null; cloudSet('saved');
     }
     render();
   }).catch(function(e){ cloudSet(navigator.onLine===false?'offline':'error',(e&&e.message)||''); render(); });
@@ -630,7 +634,7 @@ function cloudPush(){
   if(!cloud.ready||!cloud.client) return;
   if(cloud.busy){ clearTimeout(cloud.timer); cloud.timer=setTimeout(cloudPush,700); return; }
   if(navigator.onLine===false){ cloudSet('offline'); return; }
-  cloud.busy=true; var base=cloud.rev, seq=cloud.seq, payload=JSON.parse(JSON.stringify(state)), who=(cloud.user&&cloud.user.email)||'';
+  cloud.busy=true; var base=cloud.rev, seq=cloud.seq, payload=JSON.parse(JSON.stringify(liveState||state)), who=(cloud.user&&cloud.user.email)||'';
   cloud.client.from('gradebooks').update({data:payload,rev:base+1,updated_at:new Date().toISOString(),updated_by:who}).eq('id',CLOUD_CONFIG.gradebookId).eq('rev',base).select('rev').then(function(res){
     cloud.busy=false;
     if(res.error) throw res.error;
@@ -640,10 +644,10 @@ function cloudPush(){
     else { cloudPending({baseRev:cloud.rev,at:Date.now()}); clearTimeout(cloud.timer); cloud.timer=setTimeout(cloudPush,400); }
   }).catch(function(e){ cloud.busy=false; cloudSet(navigator.onLine===false?'offline':'error',(e&&e.message)||''); });
 }
-function cloudCheck(){ // pick up changes made on another device
-  if(!cloud.ready||cloud.busy||cloudPending()) return;
+function cloudCheck(force){ // pick up changes made on another device
+  if(!cloud.ready||cloud.busy||cloudPending()||liveState) return;
   cloud.client.from('gradebooks').select('rev').eq('id',CLOUD_CONFIG.gradebookId).maybeSingle().then(function(res){
-    if(res.data&&res.data.rev>cloud.rev){ var ae=document.activeElement; if(ae&&/INPUT|TEXTAREA|SELECT/.test(ae.tagName)) return; cloudPull().then(function(){ toast('Updated with changes from another device'); }); }
+    if(res.data&&res.data.rev>cloud.rev){ var ae=document.activeElement; if(!force&&ae&&/INPUT|TEXTAREA|SELECT/.test(ae.tagName)) return; cloudPull().then(function(){ toast('Updated with changes from another device'); }); }
   });
 }
 function cloudSignOut(){
@@ -765,7 +769,7 @@ function render(){
   if(locked){ renderHeader(); $('#view').innerHTML=viewSignIn(); return; }
   renderHeader();
   var fn={overview:viewOverview,grades:viewGrades,attendance:viewAttendance,reports:viewReports,settings:viewSettings}[view];
-  $('#view').innerHTML=fn();
+  $('#view').innerHTML=(liveState?'<div class="callout info archive-bar"><span>You’re viewing <b>'+esc(state.settings.schoolYear||'a past school year')+'</b>'+(state.settings.gradeLevel?' ('+esc(state.settings.gradeLevel)+')':'')+', a past school year. You can look around and print, but changes aren’t saved.</span><button class="btn small primary" data-action="archive-exit">Back to '+esc(liveState.settings.schoolYear||'the current year')+'</button></div>':'')+fn();
   if(view==='reports') refreshPreview();
 }
 
@@ -1465,10 +1469,47 @@ function rcStandalone(r){
   return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>'+esc(r.student)+' Q'+r.quarter+' Report Card</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Montserrat:wght@500;600;700&display=swap"><style>body{margin:0;background:#eee;padding:24px}.page{width:7.5in;margin:0 auto;background:#fff}.bar{max-width:780px;margin:0 auto 12px;font-family:Arial,sans-serif}@media print{body{background:#fff;padding:0}.bar{display:none}@page{size:letter;margin:.5in}}'+css+'</style></head><body><div class="bar"><button onclick="window.print()" style="font:inherit;padding:8px 14px;cursor:pointer">Print</button></div><div class="page">'+rcHTML(r)+'</div></body></html>';
 }
 
+/* ---------- New school year ---------- */
+var ny={open:false};
+function bumpYear(label){ var m=String(label||'').match(/(\d{4})\D+(\d{2,4})/); if(m){ var a=+m[1]+1, b=+m[2]; b=b<100?(b+1)%100:b+1; return a+'–'+(b<100?pad(b):b); } var y=String(label||'').match(/(\d{4})/); return y?(+y[1]+1)+'–'+(+y[1]+2):''; }
+function bumpGrade(g){ g=String(g||''); if(/\bk(indergarten)?\b/i.test(g)) return 'Grade 1'; var m=g.match(/(\d{1,2})/); return m?g.replace(m[1],String(+m[1]+1)):g; }
+function dayAfterLaborDay(y){ return iso(addDays(nthWeekday(y,9,1,1),1)); }
+function newYearPanel(){
+  var s=state.settings, c=getCal();
+  if(!ny.open) return '<section class="panel" style="margin-bottom:18px"><div class="panel-head"><div><h3>School year '+esc(s.schoolYear||'')+'</h3><p class="sub">'+(c.end?esc(fmt(s.startDate,{y:1}))+' – '+esc(fmt(c.end,{y:1})):'')+(state.pastYears.length?' · '+state.pastYears.length+' past year'+(state.pastYears.length===1?'':'s')+' saved':'')+'</p></div><button class="btn primary" data-action="ny-open">Start a new school year</button></div></section>';
+  var nextStart=dayAfterLaborDay((parseISO(s.startDate)||new Date()).getUTCFullYear()+1);
+  var h='<section class="panel" style="margin-bottom:18px;border-color:var(--navy)"><h3>Start a new school year</h3>';
+  h+='<p class="muted" style="margin:6px 0 14px;max-width:75ch">'+esc(s.schoolYear||'This year')+' is saved as a past year with all its grades, report cards and attendance. You can open it any time from Settings → Backup. The new year starts empty, ready for its curriculum. Your student, school, grading weights, scale, holidays and weekly class schedule carry over.</p>';
+  h+='<div class="row"><label class="f">New school year<input id="ny-year" value="'+esc(bumpYear(s.schoolYear))+'"></label><label class="f">Grade<input id="ny-grade" value="'+esc(bumpGrade(s.gradeLevel))+'"></label></div>';
+  h+='<div class="row" style="margin-top:10px"><label class="f">First day of school<input type="date" id="ny-start" value="'+nextStart+'"></label><label class="f">Number of school days<input type="number" id="ny-days" min="4" max="400" value="'+esc(s.schoolDays||180)+'"></label></div>';
+  h+='<label class="check" style="margin-top:12px"><input type="checkbox" id="ny-backup" checked> Download a backup of '+esc(s.schoolYear||'this year')+' first</label>';
+  if((s.breaks||[]).length||(s.extraDays||[]).length) h+='<p class="sub" style="margin-top:8px">This year’s breaks and makeup days are dated, so they’re cleared. Add next year’s under Breaks and Extra school days.</p>';
+  h+='<div class="row" style="margin-top:14px"><button class="btn primary" data-action="ny-go">Save '+esc(s.schoolYear||'this year')+' and start the new year</button><button class="btn" data-action="ny-cancel">Cancel</button></div></section>';
+  return h;
+}
+function startNewYear(){
+  var s=state.settings, label=$('#ny-year').value.trim(), grade=$('#ny-grade').value.trim(), start=$('#ny-start').value, days=Math.round(+$('#ny-days').value||0);
+  if(!label||!start||!(days>=4&&days<=400)){ toast('Fill in the school year, first day, and number of school days (4–400).'); return; }
+  if(start<=s.startDate){ toast('The new first day has to come after this year’s first day.'); return; }
+  if($('#ny-backup').checked) download('gradebook-backup-'+slug(s.schoolYear||'school-year')+'.json',JSON.stringify(state,null,1),'application/json');
+  var c=getCal(), snap=JSON.parse(JSON.stringify({settings:s,assignments:state.assignments,reportCards:state.reportCards,rcDrafts:state.rcDrafts,attendance:state.attendance}));
+  state.pastYears.unshift({id:uid(),schoolYear:s.schoolYear,gradeLevel:s.gradeLevel,start:s.startDate,end:c.end||'',archivedAt:new Date().toISOString(),data:snap});
+  state.assignments=[]; state.reportCards=[]; state.rcDrafts={}; state.attendance={};
+  s.schoolYear=label; s.gradeLevel=grade; s.startDate=start; s.schoolDays=days; s.breaks=[]; s.extraDays=[]; s.customQuarterEnds=['','',''];
+  ny.open=false; gb.quarter=null; rc.quarter=null; rc.viewing=null; att.sel=null; draft=null;
+  save(); go('overview'); toast(label+' started. Last year is saved under Settings → Backup.');
+}
+function openPastYear(id){
+  var y=state.pastYears.filter(function(x){return x.id===id;})[0]; if(!y) return;
+  liveState=state; state=normalize(Object.assign({},JSON.parse(JSON.stringify(y.data)),{pastYears:[]}));
+  cal=null; gb.quarter=null; rc.quarter=null; rc.viewing=null; att.sel=null; draft=null; go('overview');
+}
+function closePastYear(){ if(!liveState) return; state=liveState; liveState=null; cal=null; gb.quarter=null; rc.quarter=null; rc.viewing=null; att.sel=null; draft=null; go('overview'); if(cloud.ready) cloudCheck(true); }
+
 /* ---------- Calendar ---------- */
 function viewCalendar(){
   var s=state.settings, c=getCal();
-  var h='<div class="view-head"><div class="grow"><p class="muted">Starting from the first day, the gradebook counts forward your number of school days, skipping weekends, the holidays you check, and any breaks. That sets the last day of school and splits the year into quarters. Assignments matched to a school day move with the calendar.</p></div></div>';
+  var h=(liveState?'':newYearPanel())+'<div class="view-head"><div class="grow"><p class="muted">Starting from the first day, the gradebook counts forward your number of school days, skipping weekends, the holidays you check, and any breaks. That sets the last day of school and splits the year into quarters. Assignments matched to a school day move with the calendar.</p></div></div>';
   if(c.error) h+='<div class="callout err" style="margin-bottom:16px"><span>'+esc(c.error)+'</span></div>';
   if(c.note) h+='<div class="callout" style="margin-bottom:16px"><span>'+esc(c.note)+'</span></div>';
   h+='<div class="grid2"><section class="panel"><h3>School year</h3><div class="row">';
@@ -1655,6 +1696,12 @@ function settingsPanels(tab){
     h+='<div class="stack" style="gap:6px;margin-bottom:12px"><div>Signed in as <b>'+esc(cloud.user&&cloud.user.email)+'</b></div><div class="sub">'+(cloud.lastAt?'Last saved '+esc(new Date(cloud.lastAt).toLocaleString())+(cloud.lastBy?' by '+esc(cloud.lastBy):''):'')+'</div></div>';
     h+='<div class="row"><button class="btn" data-action="cloud-sync">Sync now</button><button class="btn" data-action="cloud-signout">Sign out</button></div><p class="sub" style="margin-top:10px">Signing out also removes the copy saved in this browser, so use it on shared computers.</p></section>';
   }
+  if(!liveState){
+    h+='<section class="panel"><h3>Past school years</h3>';
+    if(!state.pastYears.length) h+='<p class="muted">When you start a new school year, the year you finish is saved here. Open it any time to see its grades or print its report cards and attendance record.</p>';
+    else { h+='<div class="saved-list">'; state.pastYears.forEach(function(y){ h+='<div class="saved-item"><div class="grow"><b>'+esc(y.schoolYear||'School year')+'</b>'+(y.gradeLevel?' · '+esc(y.gradeLevel):'')+'<div class="sub">'+(y.start?esc(fmt(y.start,{y:1}))+' – '+esc(fmt(y.end,{y:1}))+' · ':'')+(y.data&&y.data.assignments?y.data.assignments.length:0)+' assignments · '+(y.data&&y.data.reportCards?y.data.reportCards.length:0)+' saved report cards</div></div><button class="btn small primary" data-action="py-open" data-id="'+y.id+'">Open</button><button class="btn small" data-action="py-export" data-id="'+y.id+'">Download backup</button><button class="btn small danger" data-action="py-delete" data-id="'+y.id+'">Delete</button></div>'; }); h+='</div>'; }
+    h+='</section>';
+  }
   h+='<section class="panel"><h3>'+(cloud.on?'Backups':'Your data')+'</h3><p class="muted" style="margin-bottom:12px">'+(cloud.on?'Export a backup now and then, such as at the end of each quarter, and keep it with the portfolio.':(storageOK?'Grades save automatically in this browser on this computer.':'This browser isn’t saving automatically.')+' Keep a backup too: clearing browser data or opening this file on another computer starts empty.')+'</p>';
   h+='<div class="stack" style="gap:10px">'+(cloud.on?'':'<div class="row"><button class="btn primary" data-action="save-copy">Save a copy with my data</button>')+''+(cloud.on?'':'<span class="sub" style="flex:1 1 200px">Downloads this gradebook as a new HTML file with every grade inside. Open that file next time; it works on any computer.</span></div>')+'';
   h+='<div class="row"><button class="btn" data-action="export">Export backup</button><button class="btn" data-action="import-backup">Restore from backup</button></div>';
@@ -1694,6 +1741,13 @@ document.addEventListener('click',function(e){
   switch(a){
     case 'goto': go(b.dataset.to); break;
     case 'stab': settingsTab=b.dataset.stab; render(); break;
+    case 'ny-open': ny.open=true; render(); var yi=$('#ny-year'); if(yi) yi.focus(); break;
+    case 'ny-cancel': ny.open=false; render(); break;
+    case 'ny-go': startNewYear(); break;
+    case 'py-open': openPastYear(b.dataset.id); break;
+    case 'archive-exit': closePastYear(); break;
+    case 'py-export': { var py=state.pastYears.filter(function(x){return x.id===b.dataset.id;})[0]; if(py) download('gradebook-backup-'+slug(py.schoolYear||'past-year')+'.json',JSON.stringify(Object.assign({},py.data,{pastYears:[]}),null,1),'application/json'); break; }
+    case 'py-delete': { var pid=b.dataset.id; arm(b,'pyd'+pid,'Click again to delete for good',function(){ state.pastYears=state.pastYears.filter(function(x){return x.id!==pid;}); save(); render(); toast('Past year deleted'); }); break; }
     case 'cloud-sync': if(cloudPending()) cloudPush(); else cloudPull().then(function(){ toast('Up to date'); }); break;
     case 'cloud-signout': cloudSignOut(); break;
     case 'si-retry': cloud.client?cloudPull(true):cloudBoot(); break;
@@ -1733,7 +1787,7 @@ document.addEventListener('click',function(e){
     case 'save-copy': { var json=JSON.stringify(Object.assign({},state,{updatedAt:Date.now()})).replace(/</g,'\\u003c'); var open='<scr'+'ipt id="embedded-data" type="application/json">', close='</scr'+'ipt>'; var i0=PRISTINE.indexOf(open), i1=PRISTINE.indexOf(close,i0); if(i0<0||i1<0){toast('Could not build the copy');break;} var html=PRISTINE.slice(0,i0+open.length)+json+PRISTINE.slice(i1); download('homeschool-gradebook-'+slug(s.studentName)+'-'+todayISO()+'.html',html,'text/html'); toast('Copy saved. Open the new file next time.'); break; }
     case 'export': download('gradebook-backup-'+todayISO()+'.json',JSON.stringify(state,null,1),'application/json'); break;
     case 'import-backup': $('#file-backup').click(); break;
-    case 'reset': arm(b,'reset','Click again to erase all grades',function(){ state=defaultState(); save(); render(); toast('Gradebook erased'); }); break;
+    case 'reset': if(liveState){ toast('Go back to the current year first.'); break; } arm(b,'reset','Click again to erase all grades',function(){ state=defaultState(); save(); render(); toast('Gradebook erased'); }); break;
   }
 });
 function refreshRowSummaryOnly(){ var sm=$('#gb-summary'); if(sm) sm.innerHTML=gradesSummary(); }
